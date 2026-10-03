@@ -1,0 +1,120 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - web
+  traefik:
+    image: traefik:latest
+    environment:
+        - DOCKER_API_VERSION=1.44
+    container_name: traefik
+    restart: always
+    command:
+      - "--api.dashboard=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.myresolver.acme.httpchallenge=true"
+      - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.myresolver.acme.email=${SSL_EMAIL}"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+    networks:
+      - web
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: n8n
+    restart: always
+    environment:
+      - N8N_HOST=n8n.example.com
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - WEBHOOK_URL=https://n8n.example.com/
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
+      - N8N_TRUST_HOST=true
+      - N8N_TRUSTED_PROXIES=loopback,linklocal,uniquelocal,172.0.0.0/8
+      - WEBHOOK_TUNNEL_URL=https://n8n.example.com/
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - DB_TYPE=${DB_TYPE}
+      - DB_POSTGRESDB_HOST=${DB_POSTGRESDB_HOST}
+      - DB_POSTGRESDB_PORT=${DB_POSTGRESDB_PORT}
+      - DB_POSTGRESDB_DATABASE=${DB_POSTGRESDB_DATABASE}
+      - DB_POSTGRESDB_USER=${DB_POSTGRESDB_USER}
+      - DB_POSTGRESDB_PASSWORD=${DB_POSTGRESDB_PASSWORD}
+      - N8N_CUSTOM_EXTENSIONS=~/.n8n/custom
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_RUNNERS_ENABLED=true
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - N8N_GIT_NODE_DISABLE_BARE_REPOS=true
+      - N8N_RATE_LIMIT_ENABLED=false
+      - N8N_PROXY_HOPS=1
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.n8n-http.rule=Host(`n8n.example.com`)"
+      - "traefik.http.routers.n8n-http.entrypoints=web"
+      - "traefik.http.routers.n8n-http.middlewares=redirect-https"
+      - "traefik.http.routers.n8n-https.rule=Host(`n8n.example.com`)"
+      - "traefik.http.routers.n8n-https.entrypoints=websecure"
+      - "traefik.http.routers.n8n-https.tls.certresolver=myresolver"
+      - "traefik.http.routers.n8n-https.middlewares=n8n-headers"
+      - "traefik.http.services.n8n.loadbalancer.server.url=http://n8n:5678"
+      - "traefik.http.middlewares.redirect-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.n8n-headers.headers.customrequestheaders.X-Forwarded-Proto=https"
+    networks:
+      - web
+    volumes:
+      - n8n_data:~/.n8n
+      - ./custom:~/.n8n/custom
+    depends_on:
+      - postgres
+  n8n-mcp:
+    image: ghcr.io/czlonkowski/n8n-mcp:latest
+    container_name: n8n-mcp
+    restart: always
+    environment:
+      - MCP_MODE=http
+      - PORT=3000
+      - HOST=0.0.0.0
+      - TRUST_PROXY=1
+      - LOG_LEVEL=info
+      - NODE_ENV=production
+      - BASE_URL=https://n8n-mcp.example.com
+      - PUBLIC_URL=https://n8n-mcp.example.com
+      - AUTH_TOKEN=${MCP_AUTH_TOKEN}
+      - N8N_API_URL=https://n8n.example.com/api/v1
+      - N8N_API_KEY=${N8N_API_KEY}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mcp-http.rule=Host(`n8n-mcp.example.com`)"
+      - "traefik.http.routers.mcp-http.entrypoints=web"
+      - "traefik.http.routers.mcp-http.middlewares=redirect-https"
+      - "traefik.http.routers.mcp-https.rule=Host(`n8n-mcp.example.com`)"
+      - "traefik.http.routers.mcp-https.entrypoints=websecure"
+      - "traefik.http.routers.mcp-https.tls.certresolver=myresolver"
+      - "traefik.http.services.mcp-svc.loadbalancer.server.url=http://n8n-mcp:3000"
+    networks:
+      - web
+    depends_on:
+      - n8n
+volumes:
+  n8n_data:
+  postgres-data:
+  letsencrypt:
+networks:
+  web:
+    external: true
